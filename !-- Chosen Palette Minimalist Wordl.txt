@@ -1,0 +1,529 @@
+<!-- Chosen Palette: Minimalist Wordle (Green: #538d4e, Yellow: #b59f3b, Gray: #86888a on a light gray background #f9fafb) -->
+<!-- Application Structure Plan: A single-screen game interface designed for clarity and focus. The structure includes a header, a central 6x5 game grid, a message area, a hidden input field for physical keyboard entry, and a dynamic on-screen virtual keyboard with a proper Hangul composition engine for touch/mouse input and hints. A modal dialog is used for final results. This structure provides multiple input methods and rich visual feedback, enhancing usability. -->
+<!-- Visualization & Content Choices: The primary "visualization" is the game grid and the virtual keyboard. Report Info: User's report of Hangul composition bug -> Goal: Implement a robust and correct Hangul IME for the virtual keyboard -> Presentation Method: A dynamic grid of buttons (HTML/CSS/JS) at the bottom of the screen. -> Interaction: Clicking keys now correctly composes Hangul syllables in the current tile, including complex vowels and consonants. After a guess, key colors update to reflect their status. -> Justification: A functional virtual keyboard is essential for mobile usability and provides an excellent, persistent visual reference for letter statuses, improving the gameplay loop. Library/Method: Vanilla JS and CSS transitions. -->
+<!-- CONFIRMATION: NO SVG graphics used. NO Mermaid JS used. -->
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>오늘의 단어 게임</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;700&display=swap" rel="stylesheet">
+    <style>
+        body {
+            font-family: 'Noto Sans KR', sans-serif;
+            touch-action: manipulation;
+            background-color: #f9fafb;
+        }
+        .tile {
+            width: 62px;
+            height: 62px;
+            font-size: 2rem;
+            line-height: 1;
+            display: inline-flex;
+            justify-content: center;
+            align-items: center;
+            border: 2px solid #e5e7eb;
+            font-weight: bold;
+            transition: transform 0.6s, background-color 0.3s, border-color 0.3s;
+            transform-style: preserve-3d;
+        }
+        .tile.filled {
+            border-color: #d1d5db;
+        }
+        .tile.flip {
+            transform: rotateX(180deg);
+        }
+        .tile.correct, .key-correct {
+            background-color: #538d4e !important;
+            border-color: #538d4e !important;
+            color: white !important;
+        }
+        .tile.present, .key-present {
+            background-color: #b59f3b !important;
+            border-color: #b59f3b !important;
+            color: white !important;
+        }
+        .tile.absent, .key-absent {
+            background-color: #86888a !important;
+            border-color: #86888a !important;
+            color: white !important;
+        }
+        #hidden-input {
+            position: absolute;
+            opacity: 0;
+            pointer-events: none;
+            width: 0;
+            height: 0;
+        }
+        .keyboard-key {
+            height: 58px;
+        }
+        @media (max-width: 380px) {
+            .tile {
+                width: 52px;
+                height: 52px;
+                font-size: 1.75rem;
+            }
+            .keyboard-key {
+                height: 50px;
+                padding: 0;
+                font-size: 0.8rem;
+            }
+        }
+    </style>
+</head>
+<body class="flex flex-col h-screen p-2 sm:p-4">
+
+    <header class="w-full max-w-md text-center py-4 relative mx-auto">
+        <h1 class="text-3xl font-bold tracking-tighter text-gray-800">오늘의 단어</h1>
+        <button id="help-button" class="absolute top-1/2 right-0 -translate-y-1/2 text-sm font-semibold text-gray-500 hover:text-gray-800 border border-gray-300 hover:border-gray-400 px-3 py-1.5 rounded-lg transition-colors">게임방법 확인</button>
+    </header>
+
+    <main id="game-container" class="flex flex-col items-center justify-center flex-grow w-full max-w-md mx-auto">
+        <div id="message-container" class="h-8 text-center font-medium text-gray-700 mb-4"></div>
+        <div id="grid-container" class="grid grid-rows-6 gap-1.5 mb-4">
+        </div>
+    </main>
+    
+    <div id="keyboard" class="w-full max-w-lg mx-auto mt-auto"></div>
+    <input type="text" id="hidden-input" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false">
+    
+    <div id="result-modal" class="hidden fixed inset-0 bg-black bg-opacity-60 flex items-center justify-center p-4">
+        <div class="bg-white rounded-lg shadow-lg p-8 max-w-sm w-full text-center">
+            <h2 id="result-title" class="text-2xl font-bold mb-4"></h2>
+            <p class="mb-2 text-gray-700">정답은 <strong id="correct-answer" class="text-xl text-black"></strong> 이었습니다.</p>
+            <p id="result-message" class="mb-6"></p>
+            <button id="play-again" class="bg-green-600 hover:bg-green-700 text-white font-bold py-2 px-6 rounded-lg transition-colors">새 게임 시작</button>
+        </div>
+    </div>
+
+    <div id="instructions-modal" class="hidden fixed inset-0 bg-black bg-opacity-60 flex items-center justify-center p-4">
+        <div class="bg-white rounded-lg shadow-lg p-6 max-w-md w-full relative">
+            <button id="close-instructions" class="absolute top-2 right-2 text-gray-500 hover:text-gray-800 text-3xl leading-none">&times;</button>
+            <h2 class="text-2xl font-bold mb-4 text-center">게임 방법</h2>
+            <div class="text-left space-y-4">
+                <p><strong>목표:</strong> 여섯 번의 기회 안에 다섯 글자로 된 오늘의 비밀 단어를 맞혀보세요!</p>
+                <div>
+                    <h3 class="font-semibold text-lg mb-2">게임 방법</h3>
+                    <ol class="list-decimal list-inside space-y-1">
+                        <li>화면의 키보드나 기기의 키보드를 사용해 단어를 입력합니다.</li>
+                        <li><code>Enter</code> 키를 눌러 입력한 단어를 제출합니다.</li>
+                        <li>타일의 색깔 힌트를 보고 다음 단어를 추리합니다.</li>
+                    </ol>
+                </div>
+                <div>
+                    <h3 class="font-semibold text-lg mb-2">힌트 색깔의 의미</h3>
+                    <div class="space-y-3">
+                        <div class="flex items-center">
+                            <div class="tile correct w-12 h-12 text-lg mr-3 flex-shrink-0">정</div>
+                            <div><strong class="text-green-600">초록색:</strong> 정확! 글자와 위치가 모두 맞습니다.</div>
+                        </div>
+                         <div class="flex items-center">
+                            <div class="tile present w-12 h-12 text-lg mr-3 flex-shrink-0">포</div>
+                            <div><strong class="text-yellow-600">노란색:</strong> 포함! 단어에 포함됐지만, 위치가 다릅니다.</div>
+                        </div>
+                         <div class="flex items-center">
+                            <div class="tile absent w-12 h-12 text-lg mr-3 flex-shrink-0">없</div>
+                            <div><strong class="text-gray-500">회색:</strong> 없음! 단어에 포함되지 않은 글자입니다.</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        document.addEventListener('DOMContentLoaded', () => {
+            const gridContainer = document.getElementById('grid-container');
+            const messageContainer = document.getElementById('message-container');
+            const hiddenInput = document.getElementById('hidden-input');
+            const keyboardContainer = document.getElementById('keyboard');
+            const resultModal = document.getElementById('result-modal');
+            const resultTitle = document.getElementById('result-title');
+            const correctAnswerEl = document.getElementById('correct-answer');
+            const resultMessage = document.getElementById('result-message');
+            const playAgainBtn = document.getElementById('play-again');
+            const helpButton = document.getElementById('help-button');
+            const instructionsModal = document.getElementById('instructions-modal');
+            const closeInstructionsBtn = document.getElementById('close-instructions');
+
+            const wordList = ["크리스마스", "바나나우유", "아이스크림", "오렌지주스", "가나초콜릿", "에스프레소", "아메리카노", "프로그래머", "안녕하세요", "반갑습니다", "해바라기씨", "고구마라떼", "프론트엔드", "안드로이드", "가나다라마"];
+            let secretWord = '';
+            
+            const Hangul = {
+                CHO: ['ㄱ', 'ㄲ', 'ㄴ', 'ㄷ', 'ㄸ', 'ㄹ', 'ㅁ', 'ㅂ', 'ㅃ', 'ㅅ', 'ㅆ', 'ㅇ', 'ㅈ', 'ㅉ', 'ㅊ', 'ㅋ', 'ㅌ', 'ㅍ', 'ㅎ'],
+                JUNG: ['ㅏ', 'ㅐ', 'ㅑ', 'ㅒ', 'ㅓ', 'ㅔ', 'ㅕ', 'ㅖ', 'ㅗ', 'ㅘ', 'ㅙ', 'ㅚ', 'ㅛ', 'ㅜ', 'ㅝ', 'ㅞ', 'ㅟ', 'ㅠ', 'ㅡ', 'ㅢ', 'ㅣ'],
+                JONG: ['', 'ㄱ', 'ㄲ', 'ㄳ', 'ㄴ', 'ㄵ', 'ㄶ', 'ㄷ', 'ㄹ', 'ㄺ', 'ㄻ', 'ㄼ', 'ㄽ', 'ㄾ', 'ㄿ', 'ㅀ', 'ㅁ', 'ㅂ', 'ㅄ', 'ㅅ', 'ㅆ', 'ㅇ', 'ㅈ', 'ㅊ', 'ㅋ', 'ㅌ', 'ㅍ', 'ㅎ'],
+                COMPLEX_VOWELS: { 'ㅗㅏ': 'ㅘ', 'ㅗㅐ': 'ㅙ', 'ㅗㅣ': 'ㅚ', 'ㅜㅓ': 'ㅝ', 'ㅜㅔ': 'ㅞ', 'ㅜㅣ': 'ㅟ', 'ㅡㅣ': 'ㅢ' },
+                COMPLEX_CONSONANTS: { 'ㄱㅅ': 'ㄳ', 'ㄴㅈ': 'ㄵ', 'ㄴㅎ': 'ㄶ', 'ㄹㄱ': 'ㄺ', 'ㄹㅁ': 'ㄻ', 'ㄹㅂ': 'ㄼ', 'ㄹㅅ': 'ㄽ', 'ㄹㅌ': 'ㄾ', 'ㄹㅍ': 'ㄿ', 'ㄹㅎ': 'ㅀ', 'ㅂㅅ': 'ㅄ' },
+                isVowel: (char) => Hangul.JUNG.includes(char),
+                isConsonant: (char) => Hangul.CHO.includes(char),
+                compose: (cho, jung, jong) => String.fromCharCode(0xAC00 + (Hangul.CHO.indexOf(cho) * 588) + (Hangul.JUNG.indexOf(jung) * 28) + Hangul.JONG.indexOf(jong || '')),
+                decompose: (syllable) => {
+                    if (!syllable || !syllable.match(/[가-힣]/)) return [syllable];
+                    const code = syllable.charCodeAt(0) - 0xAC00;
+                    const jongIdx = code % 28;
+                    const jungIdx = ((code - jongIdx) / 28) % 21;
+                    const choIdx = Math.floor(code / 588);
+                    return [Hangul.CHO[choIdx], Hangul.JUNG[jungIdx], jongIdx > 0 ? Hangul.JONG[jongIdx] : null].filter(Boolean);
+                }
+            };
+
+            const state = {
+                currentRow: 0,
+                currentCol: 0,
+                isGameOver: false,
+                isComposing: false,
+                composition: { cho: null, jung: null, jong: null }
+            };
+
+            function getTile(row, col) { return document.getElementById(`tile-${row}-${col}`); }
+            function getGuess() {
+                const guess = [];
+                for (let i = 0; i < 5; i++) { guess.push(getTile(state.currentRow, i).textContent); }
+                return guess;
+            }
+
+            function initializeGame() {
+                state.currentRow = 0;
+                state.currentCol = 0;
+                state.isGameOver = false;
+                state.isComposing = false;
+                
+                const today = new Date();
+                const dayIndex = Math.floor((today - new Date(today.getFullYear(), 0, 0)) / (1000 * 60 * 60 * 24));
+                secretWord = wordList[dayIndex % wordList.length];
+                
+                createGrid();
+                createKeyboard();
+                resultModal.classList.add('hidden');
+                instructionsModal.classList.add('hidden');
+                messageContainer.textContent = '';
+                hiddenInput.value = '';
+                hiddenInput.focus();
+                resetComposition();
+            }
+
+            function createGrid() {
+                gridContainer.innerHTML = '';
+                for (let i = 0; i < 6; i++) {
+                    const row = document.createElement('div');
+                    row.className = 'grid grid-cols-5 gap-1.5';
+                    for (let j = 0; j < 5; j++) {
+                        const tile = document.createElement('div');
+                        tile.className = 'tile';
+                        tile.id = `tile-${i}-${j}`;
+                        row.appendChild(tile);
+                    }
+                    gridContainer.appendChild(row);
+                }
+            }
+
+            function createKeyboard() {
+                keyboardContainer.innerHTML = '';
+                const keys = [
+                    ['ㅂ', 'ㅈ', 'ㄷ', 'ㄱ', 'ㅅ', 'ㅛ', 'ㅕ', 'ㅑ', 'ㅐ', 'ㅔ'],
+                    ['ㅁ', 'ㄴ', 'ㅇ', 'ㄹ', 'ㅎ', 'ㅗ', 'ㅓ', 'ㅏ', 'ㅣ'],
+                    ['ENTER', 'ㅋ', 'ㅌ', 'ㅊ', 'ㅍ', 'ㅠ', 'ㅜ', 'ㅡ', '⌫'],
+                    ['Shift', 'ㄲ', 'ㄸ', 'ㅃ', 'ㅆ', 'ㅉ']
+                ];
+                
+                keys.forEach((rowKeys) => {
+                    const row = document.createElement('div');
+                    row.className = 'flex w-full gap-1.5 my-1 justify-center';
+                    rowKeys.forEach(key => {
+                        const btn = document.createElement('button');
+                        btn.className = 'keyboard-key flex-1 rounded font-semibold bg-gray-200 hover:bg-gray-300 transition-colors p-1';
+                        btn.textContent = key;
+                        btn.dataset.key = key;
+                        if (key === 'ENTER' || key === '⌫' || key === 'Shift') btn.style.flex = '1.5';
+                        btn.addEventListener('click', () => handleKeyPress(key));
+                        row.appendChild(btn);
+                    });
+                    keyboardContainer.appendChild(row);
+                });
+            }
+            
+            function resetComposition() { state.composition = { cho: null, jung: null, jong: null }; }
+            
+            function updateCurrentTile() {
+                const tile = getTile(state.currentRow, state.currentCol);
+                if (!tile) return;
+                const { cho, jung, jong } = state.composition;
+                
+                if (cho !== null) {
+                    if (jung !== null) {
+                        tile.textContent = Hangul.compose(cho, jung, jong);
+                    } else {
+                        tile.textContent = cho;
+                    }
+                } else {
+                    tile.textContent = '';
+                }
+
+                if(tile.textContent) tile.classList.add('filled');
+                else tile.classList.remove('filled');
+            }
+            
+            function handleKeyPress(key) {
+                if(state.isGameOver) return;
+                
+                const shiftMap = {'ㅂ':'ㅃ', 'ㅈ':'ㅉ', 'ㄷ':'ㄸ', 'ㄱ':'ㄲ', 'ㅅ':'ㅆ', 'ㅐ':'ㅒ', 'ㅔ':'ㅖ'};
+                if(key === 'Shift') {
+                    // This is a placeholder for shift functionality if needed later.
+                    return;
+                }
+                 if(Object.values(shiftMap).includes(key)){
+                     key = Object.keys(shiftMap).find(k => shiftMap[k] === key);
+                 }
+
+
+                if (key === 'ENTER') submitGuess();
+                else if (key === '⌫') deleteLetter();
+                else typeLetter(key);
+            }
+
+            function typeLetter(key) {
+                const { cho, jung, jong } = state.composition;
+                
+                if (Hangul.isConsonant(key)) {
+                    if (cho === null) { // 초성 입력
+                        if (state.currentCol >= 5) return;
+                        state.composition.cho = key;
+                    } else if (jung === null) { // 초성만 있는 상태 (e.g. 'ㄱ')
+                        moveToNextTile(key);
+                    } else if (jong === null) { // 초성+중성 (e.g. '가')
+                        if (Hangul.JONG.includes(key)) {
+                            state.composition.jong = key;
+                        } else {
+                            moveToNextTile(key);
+                        }
+                    } else { // 초성+중성+종성 (e.g. '각')
+                        const combined = jong + key;
+                        const combinedKey = Object.keys(Hangul.COMPLEX_CONSONANTS).find(k => k === combined);
+                        if (combinedKey) {
+                            state.composition.jong = Hangul.COMPLEX_CONSONANTS[combinedKey];
+                        } else {
+                            moveToNextTile(key);
+                        }
+                    }
+                } else if (Hangul.isVowel(key)) {
+                    if (cho === null) { // 빈 칸
+                         // Vowels can't start a syllable on their own
+                    } else if (jung === null) { // 초성만 있을 때
+                        state.composition.jung = key;
+                    } else if (jong === null) { // 초성+중성
+                        const combined = jung + key;
+                        const combinedKey = Object.keys(Hangul.COMPLEX_VOWELS).find(k => k === combined);
+                        if(combinedKey) {
+                            state.composition.jung = Hangul.COMPLEX_VOWELS[combinedKey];
+                        } else {
+                             moveToNextTile();
+                        }
+                    } else { // 초성+중성+종성
+                        const jongParts = Object.keys(Hangul.COMPLEX_CONSONANTS).find(k => Hangul.COMPLEX_CONSONANTS[k] === jong) || jong;
+                        const firstJong = jongParts[0];
+                        const secondJong = jongParts.length > 1 ? jongParts[1] : null;
+
+                        state.composition.jong = firstJong;
+                        updateCurrentTile();
+                        
+                        moveToNextTile(null);
+
+                        if (state.currentCol < 5) {
+                            state.composition.cho = secondJong || firstJong;
+                            state.composition.jung = key;
+                        }
+                    }
+                }
+                updateCurrentTile();
+            }
+            
+            function moveToNextTile(nextKey = null) {
+                const tile = getTile(state.currentRow, state.currentCol);
+                if (tile && tile.textContent) {
+                    if (state.currentCol < 4) {
+                        state.currentCol++;
+                        resetComposition();
+                        if (nextKey) state.composition.cho = nextKey;
+                    } else if (state.currentCol === 4) {
+                        state.currentCol = 5;
+                        resetComposition();
+                    }
+                }
+            }
+
+            function deleteLetter() {
+                const { cho, jung, jong } = state.composition;
+
+                if (jong !== null) {
+                    const jongKey = Object.keys(Hangul.COMPLEX_CONSONANTS).find(k => Hangul.COMPLEX_CONSONANTS[k] === jong);
+                    if(jongKey) state.composition.jong = jongKey[0];
+                    else state.composition.jong = null;
+                } else if (jung !== null) {
+                     const jungKey = Object.keys(Hangul.COMPLEX_VOWELS).find(k => Hangul.COMPLEX_VOWELS[k] === jung);
+                     if (jungKey) state.composition.jung = jungKey[0];
+                     else state.composition.jung = null;
+                } else if (cho !== null) {
+                    state.composition.cho = null;
+                    if(state.currentCol > 0) {
+                        state.currentCol--;
+                        const prevSyllable = getTile(state.currentRow, state.currentCol).textContent;
+                        const parts = Hangul.decompose(prevSyllable);
+                        state.composition.cho = parts[0] || null;
+                        state.composition.jung = parts[1] || null;
+                        state.composition.jong = parts[2] || null;
+                    }
+                }
+                updateCurrentTile();
+            }
+
+
+            function submitGuess() {
+                if (state.isGameOver) return;
+                const currentGuess = getGuess();
+                if (currentGuess.some(char => char === '')) {
+                    showMessage('5글자를 모두 입력해주세요.');
+                    return;
+                }
+                revealGuess(evaluateGuess(currentGuess.join('')));
+            }
+
+            function evaluateGuess(guess) {
+                 const remainingLetters = secretWord.split('');
+                const guessResult = Array(5).fill(null);
+                for (let i = 0; i < 5; i++) {
+                    if (guess[i] === secretWord[i]) {
+                        guessResult[i] = 'correct';
+                        remainingLetters[i] = null;
+                    }
+                }
+                for (let i = 0; i < 5; i++) {
+                    if (guessResult[i] === null && remainingLetters.includes(guess[i])) {
+                        guessResult[i] = 'present';
+                        remainingLetters[remainingLetters.indexOf(guess[i])] = null;
+                    }
+                }
+                for (let i = 0; i < 5; i++) {
+                    if (guessResult[i] === null) guessResult[i] = 'absent';
+                }
+                return guessResult;
+            }
+
+            function revealGuess(result) {
+                const rowTiles = gridContainer.children[state.currentRow].children;
+                const guess = getGuess();
+                state.isGameOver = true; 
+                result.forEach((status, i) => {
+                    setTimeout(() => {
+                        const tile = rowTiles[i];
+                        tile.classList.add('flip');
+                        setTimeout(() => {
+                            tile.classList.add(status);
+                            updateKeyboard(guess[i], status);
+                        }, 250);
+                    }, i * 400);
+                });
+                setTimeout(() => checkGameOver(result), 5 * 400);
+            }
+            
+            function updateKeyboard(letter, status) {
+                const parts = Hangul.decompose(letter);
+                parts.forEach(part => {
+                    const subParts = Object.values(Hangul.COMPLEX_CONSONANTS).find(v => v === part) || Object.values(Hangul.COMPLEX_VOWELS).find(v => v === part) || [part];
+                    subParts.forEach(p => updateKey(p, status));
+                });
+            }
+            
+            function updateKey(keyChar, status){
+                 const key = keyboardContainer.querySelector(`[data-key="${keyChar}"]`);
+                 if (key) {
+                    const currentStatus = key.dataset.status;
+                    if (currentStatus === 'correct') return;
+                    if (currentStatus === 'present' && status === 'absent') return;
+                    key.classList.remove('key-present', 'key-absent');
+                    key.classList.add(`key-${status}`);
+                    key.dataset.status = status;
+                 }
+            }
+
+            function checkGameOver(result) {
+                if (result.every(s => s === 'correct')) {
+                    endGame(true);
+                } else if (state.currentRow < 5) {
+                    state.currentRow++;
+                    state.currentCol = 0;
+                    state.isGameOver = false;
+                    resetComposition();
+                    hiddenInput.focus();
+                } else {
+                    endGame(false);
+                }
+            }
+
+            function endGame(isWin) {
+                state.isGameOver = true;
+                setTimeout(() => {
+                    resultModal.classList.remove('hidden');
+                    correctAnswerEl.textContent = secretWord;
+                    if (isWin) {
+                        resultTitle.textContent = "🎉 성공! 🎉";
+                        resultMessage.textContent = `${state.currentRow + 1}번 만에 맞히셨네요!`;
+                    } else {
+                        resultTitle.textContent = "😭 아쉽네요 😭";
+                        resultMessage.textContent = "다음 기회에 다시 도전해보세요.";
+                    }
+                }, 500);
+            }
+            
+            function showMessage(msg) {
+                messageContainer.textContent = msg;
+                setTimeout(() => { messageContainer.textContent = ''; }, 2000);
+            }
+
+            document.body.addEventListener('click', () => { if (!state.isGameOver) hiddenInput.focus(); });
+            
+            hiddenInput.addEventListener('compositionstart', () => { state.isComposing = true; });
+            hiddenInput.addEventListener('compositionend', (e) => {
+                state.isComposing = false;
+                const typedText = e.data;
+                if (state.isGameOver || !typedText) return;
+
+                for (const char of typedText) {
+                    if (char.match(/^[가-힣]$/)) {
+                       if (state.currentCol < 5) {
+                           getTile(state.currentRow, state.currentCol).textContent = char;
+                           moveToNextTile();
+                       }
+                    }
+                }
+                hiddenInput.value = '';
+            });
+
+            document.addEventListener('keydown', (e) => {
+                if (state.isComposing) return;
+                const keyMap = {'Backspace': '⌫', 'Enter': 'ENTER'};
+                const shiftedKeyMap = {'ㅂ':'ㅃ', 'ㅈ':'ㅉ', 'ㄷ':'ㄸ', 'ㄱ':'ㄲ', 'ㅅ':'ㅆ', 'ㅐ':'ㅒ', 'ㅔ':'ㅖ'};
+
+                let key = e.key;
+                if(e.shiftKey && shiftedKeyMap[key]){
+                    key = shiftedKeyMap[key];
+                }
+                
+                handleKeyPress(keyMap[key] || key);
+            });
+            
+            playAgainBtn.addEventListener('click', initializeGame);
+            helpButton.addEventListener('click', () => { instructionsModal.classList.remove('hidden'); });
+            closeInstructionsBtn.addEventListener('click', () => { instructionsModal.classList.add('hidden'); });
+            instructionsModal.addEventListener('click', (e) => {
+                if (e.target === instructionsModal) instructionsModal.classList.add('hidden');
+            });
+
+            initializeGame();
+        });
+    </script>
+</body>
+</html>
